@@ -1,0 +1,28 @@
+{
+  "compilerOptions": {
+    "outDir": "./lib",
+    "baseUrl": "./src",
+    "target": "es6",
+    "module": "commonjs",
+    "lib": [
+      "es6",
+      "DOM"
+    ],
+    "declaration": true,
+    "strict": true,
+    "moduleResolution": "node",
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+  },
+  "include": [
+    "core/**/*",
+    "test/**/*"
+  ],
+  "exclude": [
+    "./test",
+    "./lib",
+    "./example",
+    "node_modules",
+  ]
+}
