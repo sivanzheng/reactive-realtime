@@ -9,7 +9,6 @@ import {
 	delay,
 	filter,
 	retryWhen,
-	share,
 	shareReplay,
 	tap,
 	take,
@@ -99,7 +98,6 @@ export default class Realtime {
 				take(retryTimes ?? 5),
 				tap(() => console.log('Trying to reconnect to WebSocket...'))
 			)),
-			share(),
 			shareReplay(1)
 		)
 
