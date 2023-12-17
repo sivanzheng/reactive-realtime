@@ -9,20 +9,22 @@ An ReactiveX WebSocket Client SDK
 > const client = new Realtime(<CONFIG>)
 > ```
 
-2. Set Token
+2. Connect Server
 > ```ts
-> client.setToken(<TOKEN>)
+> client.connect(<TOKEN?>)
 > ```
 
-3. Connect Server
-> ```ts
-> client.connect()
-> ```
-
-4. Disconnect From Server
+3. Disconnect From Server
 > ```ts
 > client.disconnect()
 > ```
+
+### Example
+run the following command:
+
+`parcel example/index.html`
+
+`node example/server.js`
 
 ### Config
 
@@ -32,6 +34,8 @@ protocol?: string | Array<string>       // The protocol to use to connect
 renewAfterSeconds?: number              // Renew subscribe interval, default 60s
 retryTimes?: number                     // Retry times, default 5
 retryInterval?: number                  // Retry interval, default 5s
+isRequiredAuth?: boolean                // Whether to require authentication, default true
+messageQueueSize?: number               // Message queue size, default 1000
 onOpen?: (data: unknown) => void        // Connection open callback
 onClose?: (data: unknown) => void       // Connection close callback
 ```
