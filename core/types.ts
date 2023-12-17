@@ -15,6 +15,8 @@ export type MessageType<T = unknown> = Messages.Client.Subscribe
 export interface Config {
     url: string
     protocol?: string | Array<string>
+    isRequiredAuth?: boolean
+    messageQueueSize?: number
     retryTimes?: number
     retryInterval?: number
     renewAfterSeconds?: number
@@ -34,12 +36,7 @@ export interface SubscribeParams {
     namespace: string
 }
 
-export type Token = {
-    authCode: string
-    mode: string
-} | {
-    token: string
-}
+export type Token = object
 
 export interface SendEventParams<T> {
     data: T

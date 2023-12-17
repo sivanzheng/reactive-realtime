@@ -1,46 +1,49 @@
 import { Token } from './types'
 
 export enum COMMAND {
-    MESSAGE_ERROR = 0,                                      // Internal server error
-    MESSAGE_CMD_OPEN = 1,                                   // After connection establishment, the server pushes messages such as the heartbeat interval
-    MESSAGE_CMD_CONNECT = 2,                                // Client sends connect (authentication) message
-    MESSAGE_CMD_CONNECTED = 3,                              // Server responds to successful connection message
-    MESSAGE_CMD_ABORT = 4,                                  // Server responds to refused connection message (such as authentication error, being kicked out by other devices, etc., the client should not reconnect)
-    MESSAGE_CMD_DISCONNECT = 5,                             // Server/client disconnection message (such as disconnection during server publishing, in principle, the client can reconnect)
+    MESSAGE_ERROR = 0,                                      // 服务端内部错误
+    MESSAGE_CMD_OPEN = 1,                                   // 连接建立后，服务端推送心跳间隔时间等消息
+    MESSAGE_CMD_AUTH = 2,                                   // 客户端发送连接（认证）消息
+    MESSAGE_CMD_AUTH_ACK = 3,                               // 服务端响应成功连接消息
+    MESSAGE_CMD_AUTH_ERROR = 4,                             // 服务端响应拒绝连接消息（如认证错误，被其他设备踢出等，客户端不应该重连）
+    MESSAGE_CMD_DISCONNECT = 5,                             // 服务端/客户端断开连接消息（如服务端发布时断开，原则上客户端可以重连）
 
-    MESSAGE_CMD_PING = 6,                                   // Server/client PING
-    MESSAGE_CMD_PONG = 7,                                   // Server/client PONG
+    MESSAGE_CMD_PING = 6,                                   // 服务端/客户端 PING
+    MESSAGE_CMD_PONG = 7,                                   // 服务端/客户端 PONG
+    MESSAGE_CMD_ABORT = 8,                                  // 服务端响应拒绝连接消息（如被其他设备踢出等，客户端不应该重连）
 
-    MESSAGE_CMD_REQUEST = 20,                               // Client one-time request
-    MESSAGE_CMD_REQUEST_ACK = 21,                           // Server one-time request response
-    MESSAGE_CMD_RESPONSE_ERROR = 22,                        // Server one-time response error
+    MESSAGE_CMD_REQUEST = 20,                               // 客户端一次性请求
+    MESSAGE_CMD_REQUEST_ACK = 21,                           // 服务端一次性请求响应
+    MESSAGE_CMD_RESPONSE_ERROR = 22,                        // 服务端一次性响应错误
 
-    MESSAGE_CMD_EVENT = 23,                                 // Server/client event message
-    MESSAGE_CMD_EVENT_ACK = 24,                             // Server/client event message ACK
-    MESSAGE_CMD_EVENT_ERROR = 25,                           // Server/client event message ERROR
+    MESSAGE_CMD_EVENT = 23,                                 // 服务端/客户端事件消息
+    MESSAGE_CMD_EVENT_ACK = 24,                             // 服务端/客户端事件消息 ACK
+    MESSAGE_CMD_EVENT_ERROR = 25,                           // 服务端/客户端事件消息 ERROR
 
-    MESSAGE_CMD_SUBSCRIBE = 30,                             // Client sends subscription message
-    MESSAGE_CMD_SUBSCRIBE_ACK = 31,                         // Server responds to subscription message ACK
-    MESSAGE_CMD_SUBSCRIBE_ERROR = 32,                       // Server responds to subscription message ERROR
+    MESSAGE_CMD_GROUP_EVENT = 26,                           // 服务端/客户端群组事件消息
+    MESSAGE_CMD_GROUP_EVENT_ACK = 27,                       // 服务端/客户端群组事件消息 ACK
+    MESSAGE_CMD_GROUP_EVENT_ERROR = 28,                     // 服务端/客户端群组事件消息 ERROR
 
-    MESSAGE_CMD_UNSUBSCRIBE = 33,                           // Client sends unsubscribe message
-    MESSAGE_CMD_UNSUBSCRIBE_ACK = 34,                       // Server responds to unsubscribe message ACK
-    MESSAGE_CMD_UNSUBSCRIBE_ERROR = 35,                     // Server responds to unsubscribe message confirmation ERROR
+    MESSAGE_CMD_SUBSCRIBE = 30,                             // 客户端发送订阅消息
+    MESSAGE_CMD_SUBSCRIBE_ACK = 31,                         // 服务端响应订阅消息 ACK
+    MESSAGE_CMD_SUBSCRIBE_ERROR = 32,                       // 服务端响应订阅消息 ERROR
 
-    MESSAGE_CMD_PUBLISH = 36,                               // Server publishes subscription message
-    MESSAGE_CMD_PUBLISH_ACK = 37,                           // Server publishes subscription message ACK
-    MESSAGE_CMD_PUBLISH_ERROR = 38,                         // Server publishes subscription message ERROR
+    MESSAGE_CMD_UNSUBSCRIBE = 33,                           // 客户端发送取消订阅消息
+    MESSAGE_CMD_UNSUBSCRIBE_ACK = 34,                       // 服务端响应取消订阅消息 ACK
+    MESSAGE_CMD_UNSUBSCRIBE_ERROR = 35,                     // 服务端响应取消订阅消息确认 ERROR
+
+    MESSAGE_CMD_PUBLISH = 36,                               // 服务端发布订阅消息
 }
 
 export enum CONNECTION_STATUS {
-    CONNECTION_CLOSED = 0,                                  // Connection closed normally, such as server closing due to publishing and pushing DISCONNECT information
-    CONNECTION_LOST = 1,                                    // Connection lost abnormally, such as server crash
-    CONNECTION_RETRIES_EXCEEDED = 2,                        // Retry limit exceeded
-    CONNECTION_UNREACHABLE = 3,                             // Target address unreachable
-    CONNECTION_UNSUPPORTED = 4,                             // Browser does not support WebSocket, etc.
-    CONNECTION_UNREACHABLE_SCHEDULED_RECONNECT = 5,         // Scheduled reconnection
-    CONNECTION_LOST_SCHEDULED_RECONNECT = 6,                // Reconnection terminated
-    CONNECTION_ABORTED = 7,                                 // Server terminates the connection, such as user log out, after which WebSocket should not reconnect
+    CONNECTION_CLOSED = 0,                                  // 正常关闭连接，如服务端因发布推送 DISCONNECT 信息后关闭
+    CONNECTION_LOST = 1,                                    // 异常关闭连接，如服务端宕机
+    CONNECTION_RETRIES_EXCEEDED = 2,                        // 重试超过次数限制
+    CONNECTION_UNREACHABLE = 3,                             // 目标地址不可达
+    CONNECTION_UNSUPPORTED = 4,                             // 浏览器不支持 WebSocket 等情况
+    CONNECTION_UNREACHABLE_SCHEDULED_RECONNECT = 5,         // 定时重连中
+    CONNECTION_LOST_SCHEDULED_RECONNECT = 6,                // 已终止重连
+    CONNECTION_ABORTED = 7,                                 // 服务端终止连接，如用户登出，此后 WebSocket 不应该进行重连
 }
 
 export interface BasicMessage<T> {
@@ -68,7 +71,7 @@ export namespace Messages {
         }
 
         export interface Connected extends BasicMessage<ConnectedData> {
-            cmd: COMMAND.MESSAGE_CMD_CONNECTED
+            cmd: COMMAND.MESSAGE_CMD_AUTH_ACK
         }
 
         export interface AbortData {
@@ -76,7 +79,7 @@ export namespace Messages {
         }
 
         export interface Abort extends BasicMessage<AbortData> {
-            cmd: COMMAND.MESSAGE_CMD_ABORT
+            cmd: COMMAND.MESSAGE_CMD_AUTH_ERROR
         }
 
         export interface Response<T> extends BasicMessage<T> {
@@ -128,7 +131,7 @@ export namespace Messages {
         }
 
         export interface Connect extends BasicMessage<Token> {
-            cmd: COMMAND.MESSAGE_CMD_CONNECT
+            cmd: COMMAND.MESSAGE_CMD_AUTH
             data: Token
         }
 

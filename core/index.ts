@@ -1,29 +1,8 @@
-import {
-	timer,
-	Subject,
-	Observable,
-	Subscription,
-} from 'rxjs'
-
-import {
-	delay,
-	filter,
-	retryWhen,
-	shareReplay,
-	tap,
-	take,
-	takeUntil,
-} from 'rxjs/operators'
-
-import {
-	webSocket,
-	WebSocketSubject,
-} from 'rxjs/webSocket'
-
+import Q from 'q'
+import { Subject, take } from 'rxjs'
 import {
 	Config,
 	EventResponse,
-	MessageType,
 	RequestResponse,
 	SendEventParams,
 	SendRequestParams,
@@ -31,75 +10,58 @@ import {
 	Token,
 } from './types'
 
-import {
-	BasicMessage,
-	COMMAND,
-	Messages,
-} from './messages'
+import { Messages } from './messages'
+import Cache from './common/Cache'
 
-import generateSequence from './utils/generateSequence'
-import defer from './utils/defer'
+import WebSocketAgent from './modules/WebsocketAgent'
+
+import { sendEventMethod, createEventWatcher } from './methods/event'
+import { createRequest, createSyncRequest } from './methods/request'
+import { createSubscriptionFeed, resendSubMessage } from './methods/subscribe'
 
 
 export default class Realtime {
-	private webSocketSubject: WebSocketSubject<MessageType> | null = null
-	private sharedWsSubject: Observable<MessageType> | null = null
+	private wsAgent: WebSocketAgent | null = null
 
 	private openObserver = new Subject()
 	private closeObserver = new Subject<CloseEvent>()
 
-	private token: Token | null = null
+	private initializedDefer = Q.defer<void>()
 
-	private connecting = defer<void>()
-	private connected = false
+	private subParamsCache = new Cache<Messages.Client.Subscribe>()
 
-
-	/**
-     * Create a reactive dataflow client
-     * @param config 
-     */
 	constructor(
-        private readonly config: Config,
-	) { }
-
-	/**
-     * Set token for authentication
-     * @param token Authentication Token
-     */
-	setToken(token: Token) {
-		this.token = token
+        private config: Config
+	) {
+		this.initialClient()
 	}
 
-	private get sharedWs() {
-		if (!this.sharedWsSubject) throw Error('Websocket is not connected yet')
-		return this.sharedWsSubject!
-	}
-
-	private initWs() {
+	private initialClient = async () => {
 		const {
 			url,
 			protocol,
-			retryTimes,
-			retryInterval,
+			isRequiredAuth,
+			messageQueueSize,
 			onOpen,
 			onClose,
 		} = this.config
 
-		this.webSocketSubject = webSocket<MessageType>({
-			url,
-			protocol,
-			openObserver: this.openObserver,
-			closeObserver: this.closeObserver,
-		})
-
-		this.sharedWsSubject = this.webSocketSubject.pipe(
-			retryWhen(errors => errors.pipe(
-				delay(retryInterval ?? 5000),
-				take(retryTimes ?? 5),
-				tap(() => console.log('Trying to reconnect to WebSocket...'))
-			)),
-			shareReplay(1)
+		this.wsAgent = new WebSocketAgent(
+			{
+				url,
+				protocol,
+				openObserver: this.openObserver,
+				closeObserver: this.closeObserver,
+			},
+			isRequiredAuth,
+			messageQueueSize,
 		)
+
+		this.wsAgent
+			.reconnectedStatus
+			.subscribe(() => {
+				resendSubMessage(this.wsAgent!, this.subParamsCache)
+			})
 
 		if (onOpen) {
 			this.openObserver
@@ -122,370 +84,103 @@ export default class Realtime {
 					},
 				})
 		}
+
+		this.initializedDefer.resolve()
 	}
 
-	/**
-     * Connect to server
-     */
-	connect() {
-		if (this.connected) return
-		if (!this.token) throw Error('Authentication failed')
-		this.initWs()
-
-		this.sharedWs.subscribe({
-			next: (value) => {
-				const serverMsg = value as BasicMessage<unknown>
-				if (serverMsg.cmd === COMMAND.MESSAGE_CMD_OPEN) {
-					this.sendMessage<Token>({
-						cmd: COMMAND.MESSAGE_CMD_CONNECT,
-						data: this.token!,
-					})
-				}
-				if (serverMsg.cmd === COMMAND.MESSAGE_CMD_CONNECTED) {
-					this.connecting && this.connecting.resolve()
-					this.connected = true
-				}
-				if (serverMsg.cmd === COMMAND.MESSAGE_CMD_PING) {
-					this.sendMessage({
-						cmd: COMMAND.MESSAGE_CMD_PONG
-					})
-				}
-			},
-			error: () => {
-				this.connected = false
-				this.connecting = defer<void>()
-			},
-			complete: () => {
-				this.connected = false
-				this.connecting = defer<void>()
-				this.disconnect()
-			}
-		})
-		this.connected = true
+	connect(token?: Token) {
+		if (!this.wsAgent) return Promise.resolve(false)
+		return this.wsAgent.connect(token)
 	}
 
-	/**
-     * Disconnect from server
-     */
 	disconnect() {
-		if (!this.webSocketSubject) return
-		this.webSocketSubject.complete()
-		this.webSocketSubject = null
-		this.sharedWsSubject = null
-		this.connected = false
+		this.wsAgent?.disconnect()
 	}
 
-	/**
-     * Whether the server is connected
-     */
 	get isConnected() {
-		return this.connected
+		return this.wsAgent?.isConnected
 	}
 
-	private sendMessage<T = unknown>(message: MessageType<T>) {
-		if (!this.webSocketSubject) {
-			throw Error('Websocket is not connected yet')
-		}
-		this.webSocketSubject.next(message)
+	reauthorize(token: Token) {
+		this.wsAgent?.reauthorize(token)	
 	}
 
 	/**
-     * Create a subscription
-     * @param params Params for subscribe
-     * @returns subject is used to subscribe, unsubscribe is used to cancel the subscription
-     */
-	createFeed<R>(params: SubscribeParams) {
-		const { topic, namespace } = params
-		const requestKey = namespace + topic
-
-		const subject = new Subject<R>()
-		const subscription = new Subscription()
-
-		const subscribeMessage: Messages.Client.Subscribe = {
-			topic,
-			nsp: namespace,
-			cmd: COMMAND.MESSAGE_CMD_SUBSCRIBE,
-		}
-		this.sendMessage<Messages.Client.Subscribe>(subscribeMessage)
-		subscription.add(
-			this.sharedWs.subscribe({
-				next: (msg) => {
-					const message = msg as Messages.Server.Subscribed<R>
-					if (!message.topic || !message.nsp) return
-
-					const responseKey = message.nsp + message.topic
-					if (responseKey !== requestKey) return
-
-					if (msg.cmd === COMMAND.MESSAGE_CMD_SUBSCRIBE_ERROR) {
-						subject.error(new Error(msg.message))
-					}
-
-					if (msg.cmd === COMMAND.MESSAGE_CMD_PUBLISH) {
-						const message = msg as Messages.Server.Subscribed<R>
-						subject.next(message.data)
-					}
-				},
-				error: (err: Error) => {
-					subject.error(new Error(err.message || 'Subscription Error'))
-				},
-				complete: () => {
-					subject.complete()
-				}
-			})
+	 * Send a custom event, you can choose whether to wait for the response
+	 * @param params - Event params to be sent
+	 * @param isWaitForRes - Optional, Whether to wait for a response
+	 * @returns If waiting for a response, returns a Promise
+	 */
+	sendEvent<T>(params: SendEventParams<T>): void
+	sendEvent<T>(params: SendEventParams<T>, isWaitForRes: boolean): PromiseLike<EventResponse>
+	sendEvent<T>(params: SendEventParams<T>, isWaitForRes?: boolean): PromiseLike<EventResponse> | void {
+		return sendEventMethod(
+			this.wsAgent!,
+			params,
+			isWaitForRes || false,
 		)
-
-		const { renewAfterSeconds } = this.config
-		if (renewAfterSeconds) {
-			subscription
-				.add(
-					timer(renewAfterSeconds * 1000, 1 * 1000)
-						.pipe(takeUntil(this.closeObserver))
-						.pipe(filter((_, index) => index % renewAfterSeconds === 0))
-						.subscribe({
-							next: () => {
-								const subscribeData: Messages.Client.Subscribe = {
-									topic,
-									nsp: namespace,
-									cmd: COMMAND.MESSAGE_CMD_SUBSCRIBE,
-								}
-								this.sendMessage(subscribeData)
-							}
-						})
-				)
-		}
-
-		const unsubscribe = () => {
-			const unSubScribeMessage: Messages.Client.UnSubscribe = {
-				topic,
-				nsp: namespace,
-				cmd: COMMAND.MESSAGE_CMD_UNSUBSCRIBE,
-			}
-			this.sendMessage<Messages.Client.UnSubscribe>(unSubScribeMessage)
-			subject.unsubscribe()
-			subscription.unsubscribe()
-		}
-		return ({
-			subject,
-			unsubscribe,
-		})
 	}
 
 	/**
-     * Send a request synchronously
-     * @param params Request params to be sent
-     * @returns Response data
-     */
-	async requestSync<T, R>(params: SendRequestParams<T>) {
-		await this.connecting.promise
-		const {
-			data,
-			path,
-			namespace,
-			timeout,
-		} = params
-		const timeoutDefer = defer<R>()
-		const sequence = generateSequence()
-		const requestMessage: Messages.Client.Request<T> = {
-			data,
-			path,
-			seq: sequence,
-			nsp: namespace,
-			cmd: COMMAND.MESSAGE_CMD_REQUEST,
-		}
-		this.sendMessage(requestMessage)
-
-		const subscription = new Subscription()
-		if (timeout) {
-			subscription.add(
-				timer(timeout)
-					.subscribe({
-						next: () => {
-							timeoutDefer.reject('TIMEOUT')
-						}
-					})
-			)
-		}
-
-		const requestSubscription = this.sharedWs.subscribe({
-			next: (message) => {
-				const msg = message as Messages.Server.Response<R>
-				if (msg.seq !== sequence) return
-				if (msg.cmd === COMMAND.MESSAGE_CMD_REQUEST_ACK) {
-					timeoutDefer.resolve(msg.data!)
-				}
-				if (msg.cmd === COMMAND.MESSAGE_CMD_RESPONSE_ERROR) {
-					timeoutDefer.reject(msg.message)
-				}
-			}
-		})
-		subscription.add(requestSubscription)
-
-		return timeoutDefer.promise.finally(() => subscription.unsubscribe())
+	 * Listen for broadcast events
+	 * @param name Custom event name
+	 * @param nsp Service Namespace
+	 * @param isWaitForRes Optional, whether to send ACK after received event
+	 * @returns subject is used to subscribe, unsubscribe is used to cancel the subscription
+	 */
+	watchEvent<R>(name: string, nsp: string, isWaitForRes = false) {
+		return createEventWatcher<R>(
+			this.wsAgent!,
+			name,
+			nsp,
+			isWaitForRes,
+		)
 	}
 
 	/**
-     * Send a request asynchronously
-     * @param params Request params to be sent
-     * @param onResponse Response callback
-     * @param onError Error callback
-     */
-	request<T, R>(
+	 * Send a request asynchronously
+	 * @param params Request params to be sent
+	 * @param onResponse Response callback
+	 * @param onError Error callback
+	 */
+	request<T, R = unknown>(
 		params: SendRequestParams<T>,
 		onResponse: (data: RequestResponse<R>) => void,
 		onError?: (errMsg: Error) => void,
 	) {
-		const sequence = generateSequence()
-		this.connecting.promise.then(() => {
-			const {
-				data,
-				path,
-				namespace,
-				timeout,
-			} = params
-
-			const eventMessage: Messages.Client.Request<T> = {
-				data,
-				path,
-				seq: sequence,
-				nsp: namespace,
-				cmd: COMMAND.MESSAGE_CMD_REQUEST,
-			}
-			this.sendMessage(eventMessage)
-
-			const subscription = new Subscription()
-
-			if (timeout) {
-				subscription
-					.add(
-						timer(timeout)
-							.subscribe({
-								next: () => {
-									onResponse({ isTimeout: true })
-									subscription.unsubscribe()
-								}
-							})
-					)
-			}
-
-
-			const remoteSubscription = this.sharedWs.subscribe({
-				next: (message) => {
-					const msg = message as Messages.Server.Response<R>
-					if (msg.seq !== sequence) return
-
-					if (msg.cmd === COMMAND.MESSAGE_CMD_REQUEST_ACK) {
-						onResponse({
-							data: msg.data!,
-							isTimeout: false,
-						})
-					}
-					if (msg.cmd === COMMAND.MESSAGE_CMD_RESPONSE_ERROR) {
-						if (onError) {
-							onError(new Error(msg.message || 'Bad Request'))
-						}
-					}
-					subscription.unsubscribe()
-				},
-				error: (err: Error) => {
-					if (onError) {
-						onError(new Error(err.message || 'Request Error'))
-					}
-				},
-			})
-
-			subscription.add(remoteSubscription)
-		})
+		return createRequest<T, R>(
+			this.wsAgent!,
+			params,
+			onResponse,
+			onError
+		)
 	}
 
 	/**
-     * Send a custom event, you can choose whether to wait for the response
-     * @param params - Event params to be sent
-     * @param respond - Optional, Whether to wait for a response
-     * @returns If waiting for a response, returns a Promise
-     */
-	sendEvent<T, R = unknown>(params: SendEventParams<T>): void
-	sendEvent<T, R = unknown>(params: SendEventParams<T>, respond: boolean): PromiseLike<EventResponse>
-	sendEvent<T, R = unknown>(params: SendEventParams<T>, respond?: boolean): PromiseLike<EventResponse> | void {
-		const { data, name, namespace } = params
-		const seq = generateSequence()
-		const eventMessage: Messages.Client.Event<T> = {
-			seq,
-			name,
-			data,
-			nsp: namespace,
-			cmd: COMMAND.MESSAGE_CMD_EVENT,
-		}
-		this.sendMessage(eventMessage)
-		if (respond) {
-			const ackDefer = defer<EventResponse>()
-			this.sharedWs.subscribe({
-				next: (message) => {
-					const msg = message as Messages.Server.Events<R>
-					if (
-						msg.name === name
-                        && msg.nsp === namespace
-                        && msg.seq === seq
-					) {
-						if (msg.cmd === COMMAND.MESSAGE_CMD_EVENT_ACK) {
-							ackDefer.resolve({ ack: true })
-						}
-						if (msg.cmd === COMMAND.MESSAGE_CMD_EVENT_ERROR) {
-							ackDefer.reject({
-								ack: false,
-								error: msg.message,
-							})
-						}
-					}
-				}
-			})
-			return ackDefer.promise
-		}
+	 * Send a request synchronously
+	 * @param params Request params to be sent
+	 * @returns Response data
+	 */
+	async requestSync<T, R>(
+		params: SendRequestParams<T>
+	) {
+		return createSyncRequest<T, R>(
+			this.wsAgent!,
+			params,	
+		)
 	}
 
 	/**
-     * Listen for broadcast events
-     * @param name Custom event name
-     * @param nsp Service Namespace
-     * @param respond Optional, whether to send ACK after received event
-     * @returns subject is used to subscribe, unsubscribe is used to cancel the subscription
-     */
-	watchEvent<R>(name: string, nsp: string, respond = false) {
-		const subject = new Subject<R>()
-		const subscription = this.sharedWs
-			.subscribe({
-				next: (message) => {
-					const msg = message as Messages.Server.Events<R>
-					if (msg.name === name && msg.nsp === nsp) {
-						switch (msg.cmd) {
-						case COMMAND.MESSAGE_CMD_EVENT:
-							if (respond) {
-								const ackMessage: Messages.Client.EventACK = {
-									name,
-									nsp,
-									seq: msg.seq,
-									cmd: COMMAND.MESSAGE_CMD_EVENT_ACK
-								}
-								this.sendMessage<never>(ackMessage)
-							}
-							subject.next(message.data as R)
-							break
-						case COMMAND.MESSAGE_CMD_EVENT_ERROR:
-							subject.error(new Error((message as Messages.Server.EventError).message ?? 'Watch Event Error'))
-							break
-						case COMMAND.MESSAGE_CMD_EVENT_ACK:
-							break
-						default: break
-						}
-					}
-				}
-			})
-		const unsubscribe = () => {
-			subject.unsubscribe()
-			subscription.unsubscribe()
-		}
-		return ({
-			subject,
-			unsubscribe
-		})
+	 * Create a subscription
+	 * @param params Params for subscribe
+	 * @returns subject is used to subscribe, unsubscribe is used to cancel the subscription
+	 */
+	createFeed<R>(params: SubscribeParams) {
+		return createSubscriptionFeed<R>(
+			this.wsAgent!,
+			this.subParamsCache,
+			params,
+			this.config.renewAfterSeconds
+		)
 	}
 }
