@@ -9,10 +9,8 @@ const client = new Realtime({
 		console.log('disconnect')
 	}
 })
-// Set token
-client.setToken({ authCode: 'sss', mode: 'H' })
 // Connect to server
-client.connect()
+client.connect({ token: 'token' })
 
 
 /**

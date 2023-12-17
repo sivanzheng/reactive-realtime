@@ -19,8 +19,8 @@ describe('Realtime', () => {
 	let wss: ws.Server<ws.WebSocket> | null = null
 	let isOpenHaveBeenCalled = false
 	let isClientReceivedBroadcastMessage = false 
-	let broadcastInterval: NodeJS.Timer
-	let heartbeatInterval: NodeJS.Timer
+	let broadcastInterval: any
+	let heartbeatInterval: any
 	let broadcastCount = 0
 	const broadcastDefer = Q.defer<boolean>()
 	const broadcastErrorDefer = Q.defer<boolean>()
@@ -43,11 +43,15 @@ describe('Realtime', () => {
 				resolve(undefined)
 			})
 			wss.on('connection', (client) => {
-				client.send(JSON.stringify({ cmd: 3 }))
+				client.send(JSON.stringify({ cmd: COMMAND.MESSAGE_CMD_OPEN }))
 				client.on('message', (data: string) => {
 					const message = JSON.parse(data)
 					const cmd = message.cmd as COMMAND
 					switch (cmd) {
+					case COMMAND.MESSAGE_CMD_AUTH: {
+						client.send(JSON.stringify({ cmd: COMMAND.MESSAGE_CMD_AUTH_ACK }))
+						break
+					}
 					case COMMAND.MESSAGE_CMD_PING: {
 						client.send(JSON.stringify({ cmd: COMMAND.MESSAGE_CMD_PONG }))
 						break
@@ -151,9 +155,7 @@ describe('Realtime', () => {
 	})
 
 	it('should connect to server', async () => {
-		realtime.setToken({ token: 'token'})
-		realtime.connect()
-		await sleep(1000)
+		await realtime.connect({ token: 'token'})
 		expect(realtime.isConnected).toBeTruthy()
 	})
 	it('should call onOpen callback', async () => {
@@ -173,6 +175,7 @@ describe('Realtime', () => {
 		for (const message of messages) {
 			expect(typeof message).toBe('number')
 		}
+		feed.unsubscribe()
 	})
 
 	it('should unsubscribe to topic', async () => {
