@@ -16,7 +16,7 @@ const dom = new JSDOM();
 
 describe('Realtime', () => {
 	let realtime: Realtime
-	let wss: ws.Server<ws.WebSocket> | null = null
+	let wss: ws.Server | null = null
 	let isOpenHaveBeenCalled = false
 	let isClientReceivedBroadcastMessage = false 
 	let broadcastInterval: any
